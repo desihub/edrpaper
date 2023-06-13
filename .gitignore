@@ -1,0 +1,24 @@
+# latex intermediate files
+*.bbl
+*.blg
+*.log
+*.aux
+*.out
+
+# editor temp files
+*.swp
+*~
+
+# figures in nb/generated_figures are versioned, but ignore figures elsewhere
+./*.pdf
+./*.png
+bin/*.pdf
+bin/*.png
+nb/*.pdf
+nb/*.png
+nb/temp_figures
+*~
+
+# jupyter notebook leftovers
+nb/.ipynb_checkpoints
+.ipynb_checkpoints
