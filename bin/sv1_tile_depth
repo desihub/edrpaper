@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+
+"""
+Summarize SV1 dark/bright tiles
+"""
+
+import sys
+from os.path import expandvars
+from glob import glob
+from astropy.table import Table, vstack
+from astropy.io import ascii
+import numpy as np
+
+tiles = Table.read(expandvars('$DESI_ROOT/spectro/redux/fuji/tiles-fuji.csv'))
+exps = Table.read(expandvars('$DESI_ROOT/spectro/redux/fuji/exposures-fuji.csv'))
+
+#- Hack: try replacing EFFTIME_SPEC with EXPTIME to see if it changes story
+# tiles['EFFTIME_SPEC'] = tiles['EXPTIME']
+
+#- SV1 dark and bright tiles
+keep = (tiles['SURVEY'] == 'sv1')
+keep &= ((tiles['PROGRAM'] == 'dark') |
+         (tiles['PROGRAM'] == 'bright') |
+         ((tiles['PROGRAM'] == 'other') & (tiles['FAPRGRM']=='ssv'))
+         )
+tiles = tiles[keep]
+
+#- Visually inspected tiles
+vifiles = glob(expandvars('$DESI_ROOT/sv/vi/TruthTables/Fuji/*/*.csv'))
+if len(vifiles) == 0:
+    print('ERROR: no $DESI_ROOT/sv/vi/TruthTables/Fuji VI files found')
+    sys.exit(1)
+
+vitiles = dict()
+for filename in vifiles:
+    vi = Table.read(filename)
+    if 'TILEID' in vi.colnames:
+        for tileid in np.unique(vi['TILEID']):
+            if tileid not in vitiles:
+                vitiles[tileid] = 0
+            vitiles[tileid] += np.sum(vi['TILEID'] == tileid)
+    else:
+        print(f'Skipping {filename}')
+
+
+#- visually flag pre-selected deep tiles
+tiles['VI'] = 0
+for i, tileid in enumerate(tiles['TILEID']):
+    if tileid in vitiles:
+        tiles['VI'][i] = vitiles[tileid]
+
+#- Number of nights per tile
+tiles['NUM_NIGHTS'] = np.zeros(len(tiles), dtype=np.int16)
+for i, tileid in enumerate(tiles['TILEID']):
+    jj = (exps['TILEID'] == tileid)
+    n = len(set(exps['NIGHT'][jj]))
+    tiles['NUM_NIGHTS'][i] = n
+
+#- Print top 10 tiles for each FAPRGRM
+for faprogram in sorted(set(tiles['FAPRGRM'])):
+    ii = (tiles['FAPRGRM'] == faprogram)
+    ntiles = np.sum(ii)
+
+    tt = tiles[ii]
+    tt.sort('EFFTIME_SPEC', reverse=True)
+    print(f'--- {faprogram}, {ntiles} tiles ---')
+    print(tt['TILEID', 'SURVEY', 'PROGRAM', 'FAPRGRM', 'NEXP',
+             'EFFTIME_SPEC', 'GOALTIME', 'VI', 'NUM_NIGHTS'][0:10])
+    print()
+
+#- Print tiles 2x deeper than median
+deeptiles = list()
+for faprogram in sorted(set(tiles['FAPRGRM'])):
+    ii = (tiles['FAPRGRM'] == faprogram)
+    tt = tiles[ii]
+    depth = np.median(tt['EFFTIME_SPEC'])
+    extra_deep = tt['EFFTIME_SPEC'] > 2*depth
+    if np.any(extra_deep):
+        deeptiles.append(tt[extra_deep])
+
+deeptiles = vstack(deeptiles)
+print('\n--- Tiles that are 2x deeper than median for this FAPRGRM ---')
+print(deeptiles['TILEID', 'SURVEY', 'PROGRAM', 'FAPRGRM', 'NEXP',
+                'NUM_NIGHTS', 'EFFTIME_SPEC', 'VI'])
+
+#- Print deepest tiles for each primary FAPRGRM
+#- lrgqso2 is less deep than lrgqso, so don't bother
+besttiles = list()
+faprgrm2targets = dict(
+        bgsmws='MWS,BGS',
+        elg='ELG',
+        elgqso='ELG,QSO',
+        lrgqso='LRG,QSO',
+        ssv='MWS')
+
+for faprogram in ['ssv', 'bgsmws', 'lrgqso', 'elgqso', 'elg']:
+    ii = (tiles['FAPRGRM'] == faprogram)
+    tt = tiles[ii]
+    tt.sort('EFFTIME_SPEC', reverse=True)
+    tt['Targets'] = faprgrm2targets[faprogram]
+    besttiles.append(tt[0:1])
+
+besttiles = vstack(besttiles)
+besttiles.sort('EFFTIME_SPEC')
+
+#- convert to hours
+besttiles['EFFTIME_SPEC_HOURS'] = (besttiles['EFFTIME_SPEC']/3600).round(2)
+
+print('\n--- Deepest tiles for each FAPRGRM ---')
+print(besttiles['TILEID', 'Targets', 'EFFTIME_SPEC_HOURS'])
+print()
+ascii.write(besttiles['TILEID', 'Targets', 'EFFTIME_SPEC_HOURS'], format='latex')
+
+sys.exit(0)
+
+#- Histogram effective exposure times
+import matplotlib.pyplot as plt
+
+dark = (tiles['PROGRAM'] == 'dark')
+bright = (tiles['PROGRAM'] == 'bright') | (tiles['PROGRAM'] == 'other')
+
+plt.figure()
+plt.subplot(211)
+plt.hist(tiles['EFFTIME_SPEC'][dark], 100, (0, 25000))
+plt.ylabel('Dark tiles')
+
+plt.subplot(212)
+plt.hist(tiles['EFFTIME_SPEC'][bright], 100, (0, 25000))
+plt.ylabel('Bright tiles')
+
+plt.xlabel('EFFTIME_SPEC [s]')
+
+#- Histogram number of nights per tile
+plt.figure()
+plt.subplot(211)
+plt.hist(tiles['NUM_NIGHTS'][dark], 30, (0, 30))
+plt.ylabel('Dark tiles')
+
+plt.subplot(212)
+plt.hist(tiles['NUM_NIGHTS'][bright], 30, (0, 30))
+plt.ylabel('Bright tiles')
+
+plt.xlabel('Number of nights per tile')
+
+
+plt.show()
+

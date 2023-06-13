@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+
+"""
+Itemize which sv3 tiles are in which rosettes
+"""
+
+import os
+import numpy as np
+from astropy.table import Table
+
+rosette_ras = np.array([
+    150.100, 179.600, 183.100, 189.900, 194.750, 210.000, 215.500,
+    217.800, 216.300, 219.800, 218.050, 242.750, 241.050, 245.880,
+    252.500, 269.730, 194.750, 212.800, 269.730, 236.100, ])
+
+rosette_decs = np.array([
+     2.182, 0.000, 0.000, 61.800, 28.200, 5.000, 52.500,
+     34.400, -0.600, -0.600, 2.430, 54.980, 43.450, 43.450,
+     34.500, 66.020, 24.700, -0.600, 62.520, 43.450, ])
+
+assert len(rosette_ras) == len(rosette_decs)
+num_rosettes = len(rosette_ras)
+rosette_ids = np.arange(num_rosettes)
+
+tilefile = os.path.expandvars('$DESI_ROOT/spectro/redux/fuji/tiles-fuji.csv')
+tiles = Table.read(tilefile)
+
+tiles = tiles[tiles['SURVEY'] == 'sv3']
+
+def summarize_array(a):
+    """
+    Converts array into string of ranges, e.g. 1,2,3,5,6,7 -> 1-3,5-7
+    """
+    a = np.asarray(a).copy()
+    a.sort()
+    start = a.min()
+    output = ''
+    for i in range(len(a)-1):
+        if a[i+1] > a[i]+1:
+            end = a[i]
+            if start == end:
+                output += f'{start},'
+            else:
+                output += f'{start}-{end},'
+            start=a[i+1]
+
+    end = a[-1]
+    if start == end:
+        output += f'{start}'
+    else:
+        output += f'{start}-{end}'
+
+    return output
+
+
+# no rosettes are near RA=0 or DEC=+/-90, so we don't need to be fancy
+# about wraparounds
+
+for i in range(num_rosettes):
+    dra = (tiles['TILERA'] - rosette_ras[i]) / np.cos(np.radians(tiles['TILEDEC']))
+    ddec = (tiles['TILEDEC'] - rosette_decs[i])
+    inrosette = dra**2 + ddec**2 < 1
+    tile_range = summarize_array(tiles['TILEID'][inrosette])
+
+    print(f'SV3 R{i:<2} & {rosette_ras[i]:8.2f} & {rosette_decs[i]:8.3f} & {tile_range}')
+
+

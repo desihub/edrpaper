@@ -1,0 +1,162 @@
+#!/usr/bin/env python
+
+"""
+This script finds all the tiles observed during cmx and sv1
+that were dedicated to secondary targets.
+
+It summarizes into a table their descriptions, the TILEIDs, effective exposure times and targeting bits included in those tiles.
+"""
+
+import os
+import numpy as np
+from astropy.io import fits
+from astropy.table import Table
+import fitsio
+
+SPEC_PROD = "fuji"
+EFFTIME_CONVERSION = 3600  # Convert effective time to hours
+
+desc = {
+        "dc3r2": "Photo-z calibration",
+        "m31": "M31",
+        "m33": "M33",
+        "mwclusgaldeep": "Star Clusters and Dwarf Galaxies",
+        "praesepe": "Praesepe (Beehive cluster)",
+        "rosette": "Rosette Nebulae",
+        "scndcosmos": "Various samples",
+        "scndhetdex": "HETDEX follow-up and Lya tomog.",
+        "ssv": "Stellar Survey Validation",
+        "umaii": "Ursa Major II dwarf galaxy",
+        "unwisebluebright": "n(z) calib. for CMB lensing x-corr",
+        "unwisebluefaint": "n(z) calib. for CMB lensing x-corr",
+        "unwisegreen": "n(z) calib. for CMB lensing x-corr",
+    }
+
+def read_tiles(specprod):
+    fn = os.path.join(
+        os.getenv("DESI_ROOT"),
+        "spectro",
+        "redux",
+        specprod,
+        "tiles-{}.csv".format(specprod),
+    )
+    tiles = Table.read(fn)
+    return tiles
+
+def filter_and_sort_tiles(tiles):
+    sel = np.in1d(tiles["SURVEY"], ["cmx", "sv1"])
+    sel &= ~np.in1d(
+        tiles["FAPRGRM"], ["backup1", "bgsmws", "elg", "elgqso", "lrgqso", "lrgqso2"]
+    )
+    tiles = tiles[sel]
+
+    tiles = tiles[tiles["TILEID"].argsort()]
+    return tiles
+
+def create_summary_table(tiles):
+    myd = Table()
+    myd["FAPRGRM"] = np.unique(tiles["FAPRGRM"])
+    nfaprgrm = len(myd)
+    for key in ["DESCR", "TILEIDS", "EFFTIME_HR", "TARGS"]:
+        myd[key] = np.full(nfaprgrm, "-", dtype=object)
+
+    return myd
+
+def populate_summary_table(tiles, myd, desc):
+     # tileids
+    nfaprgrm = len(myd)
+    all_tileids = tiles["TILEID"]
+
+    for i in range(nfaprgrm):
+        sel = tiles["FAPRGRM"] == myd["FAPRGRM"][i]
+        tileids = tiles["TILEID"][sel]
+        if tileids.size == 1:
+            myd["TILEIDS"][i] = str(tileids[0])
+        else:
+            sel = (
+                (~np.in1d(all_tileids, tileids))
+                & (all_tileids >= tileids.min())
+                & (all_tileids <= tileids.max())
+            )
+            if sel.sum() == 0:
+                myd["TILEIDS"][i] = "{}-{}".format(tileids.min(), tileids.max())
+            else:
+                myd["TILEIDS"][i] = ",".join(tileids.astype(str))
+
+    # efftime_hrs
+    for i in range(nfaprgrm):
+        sel = tiles["FAPRGRM"] == myd["FAPRGRM"][i]
+        efftime_hrs = tiles["EFFTIME_SPEC"][sel] / EFFTIME_CONVERSION
+        if tileids.size == 1:
+            myd["EFFTIME_HR"][i] = "{:.2f}".format(efftime_hrs[0])
+        else:
+            myd["EFFTIME_HR"][i] = "{:.2f}-{:.2f}".format(
+                efftime_hrs.min(), efftime_hrs.max()
+            )
+
+    # get targets
+    fadir = os.path.join(
+        os.getenv("DESI_TARGET"), "fiberassign", "tiles", "tags", "0.5"
+    )
+    for i in range(nfaprgrm):
+        sel = tiles["FAPRGRM"] == myd["FAPRGRM"][i]
+        # m31: https://github.com/desihub/fiberassign/blob/5.0.0/bin/fba_sv1#L899-L906
+        if myd["FAPRGRM"][i] == "m31":
+            myd["TARGS"][i] = "M31_KNOWN,M31_QSO,M31_STAR"
+        # m33: https://github.com/desihub/fiberassign/blob/5.0.0/bin/fba_sv1#L837-L846
+        elif myd["FAPRGRM"][i] == "m33":
+            myd["TARGS"][
+                i
+            ] = "SV0_WD,M33_H2PN,M33_GC,M33_QSO,M33_M33cen,M33_M33out,SV0_QSO,SV0_LRG,SV0_ELG"
+        # dc3r2: https://github.com/desihub/fiberassign/blob/5.0.0/bin/fba_launch_dc3r2_gama#L186-L231
+        elif myd["FAPRGRM"][i] == "dc3r2":
+            myd["TARGS"][i] = "DC3R2_GAMA and all DARK primary targets as filler"
+        # praesepe: https://github.com/desihub/fiberassign/blob/5.0.0/bin/fba_sv1#L907-L920
+        #           writing by hand as too many bits otherwise
+        elif myd["FAPRGRM"][i] == "praesepe":
+            myd["TARGS"][i] = "All secondary targets except LOW_Z"
+        # rosette: https://github.com/desihub/fiberassign/blob/bin/fba_sv1#L869-L882
+        #          writing by hand as too many bits otherwise
+        elif myd["FAPRGRM"][i] == "rosette":
+            myd["TARGS"][i] = "All secondary targets"
+        else:
+            sctargs = []
+            for tileid in tiles["TILEID"][sel]:
+                tileidpad = "{:06}".format(tileid)
+                fn = os.path.join(
+                    fadir, tileidpad[:3], "fiberassign-{}.fits.gz".format(tileidpad)
+                )
+                sctargs.append(fits.getheader(fn, 0)["SCTARG"])
+            assert np.unique(sctargs).size == 1
+            myd["TARGS"][i] = sctargs[0]
+
+    # convert back to str
+    for key in ["TILEIDS", "EFFTIME_HR", "TARGS"]:
+        myd[key] = myd[key].astype(str)
+    # sort by increasing first tileid
+    myd = myd[myd["TILEIDS"].argsort()]
+    return myd
+
+def print_output_table(myd):
+    nfaprgrm = len(myd)
+    for i in range(nfaprgrm):
+        print(
+            "{}\\\\".format(
+                " & ".join([myd[key][i].replace("_", "\\_") for key in myd.colnames])
+            )
+        )
+
+def main():
+    # Read and preprocess tiles
+    tiles = read_tiles(SPEC_PROD)
+    tiles = filter_and_sort_tiles(tiles)
+
+    # Create and populate the summary table
+    myd = create_summary_table(tiles)
+    myd = populate_summary_table(tiles, myd, desc)
+
+    # Print the output table
+    print_output_table(myd)
+
+if __name__ == "__main__":
+    main()

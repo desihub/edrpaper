@@ -1,0 +1,95 @@
+#!/usr/bin/env python
+
+"""
+Documenting numbers included in the EDR Press Release
+"""
+
+import os, sys, glob, random
+import numpy as np
+import fitsio
+
+fujidir = os.path.expandvars('$DESI_ROOT/spectro/redux/fuji')
+
+columns = ['TARGETID', 'ZCAT_PRIMARY', 'OBJTYPE', 'COADD_FIBERSTATUS',
+           'Z', 'ZWARN', 'SPECTYPE']
+
+zcatfile = f'{fujidir}/zcatalog/zall-pix-fuji.fits'
+zcat = fitsio.read(zcatfile, 1, columns=columns)
+
+irondir = os.path.expandvars('$DESI_ROOT/spectro/redux/iron')
+ironzcat = fitsio.read(f'{irondir}/zcatalog/zall-pix-iron.fits', 1, columns=['TARGETID', 'ZCAT_PRIMARY'])
+percent_of_total = 100 * len(zcat) / (5*len(ironzcat))
+print(f'Fuji/EDR is ~{percent_of_total:.1f}% of the final DESI dataset')
+
+expfile = f'{fujidir}/exposures-fuji.fits'
+exp = fitsio.read(expfile, 'EXPOSURES')
+
+keep = (zcat['ZCAT_PRIMARY']==1)         # best unique
+keep &= (zcat['OBJTYPE']=='TGT')         # science targets
+# no hardware problems (8=restricted reach, but ok target)
+keep &= ((zcat['COADD_FIBERSTATUS']==0) | (zcat['COADD_FIBERSTATUS']==8))
+zcat = zcat[keep]
+
+nobj = len(zcat)
+ngoodz = np.sum(zcat['ZWARN']==0)
+
+print(f'{ngoodz} good redshifts of {nobj} good targets')
+print(f'{ngoodz/1e6:.2f}M good redshifts of {nobj/1e6:.2f}M good targets')
+
+extragalactic = (zcat['SPECTYPE']=='GALAXY') | (zcat['SPECTYPE']=='QSO')
+isqso = (zcat['SPECTYPE']=='QSO')
+star = (zcat['SPECTYPE']=='STAR')
+ngalqso = np.sum((zcat['ZWARN']==0) & extragalactic)
+nqso = np.sum((zcat['ZWARN']==0) & isqso)
+nlya = np.sum((zcat['ZWARN']==0) & isqso & (zcat['Z']>2))
+nstar = np.sum((zcat['ZWARN']==0) & star)
+print(f'{nstar/1e3:.0f}k good stars and {ngalqso/1e3:.0f}k good galaxy/qsos')
+print(f'{nqso/1e3:.0f}k QSOs; {nlya/1e3:.0f}k LyA QSOs')
+
+# https://data.desi.lbl.gov/desi/metadata/reports/2023-04-15.html
+# --> public/edr/spectro/redux/fuji
+fujisize = 80.1 # GB
+rawsize = 11.4
+print(f'{fujisize} GB of spectra; {rawsize} GB raw data')
+
+nexp = len(exp)
+print(f'{nexp} exposures')
+
+# statistically estimate good redshifts so far
+print('counting good redshifts in daily...')
+dailydir = os.path.expandvars('$DESI_ROOT/spectro/redux/daily')
+rrfiles = list(glob.glob(f'{dailydir}/tiles/archive/*/*/redrock*.fits'))
+nrrfiles = len(rrfiles)
+ntest = 1000
+print(f'Sampling {ntest} out of {nrrfiles} redrock files')
+
+random.seed(0)
+random.shuffle(rrfiles)
+ngoodz = 0
+ngoodz_gal = 0
+ngoodz_qso = 0
+for filename in rrfiles[0:ntest]:
+    with fitsio.FITS(filename) as fp:
+        zcat = fp['REDSHIFTS'].read()
+        fm = fp['FIBERMAP'].read()
+
+    ok = (zcat['ZWARN']==0) & (fm['OBJTYPE']=='TGT')
+    okgal = ok & (zcat['SPECTYPE'] == 'GALAXY')
+    okqso = ok & (zcat['SPECTYPE'] == 'QSO')
+    n = np.sum(ok)
+    ngoodz += n
+    ngoodz_gal += np.sum(okgal)
+    ngoodz_qso += np.sum(okqso)
+    # print(f'{n}/500 = {n/500:.3f}')
+
+ngoodz *= nrrfiles / ntest
+ngoodz_gal *= nrrfiles / ntest
+ngoodz_qso *= nrrfiles / ntest
+print(f'Estimated {ngoodz/1e6:.1f}M good redshifts in daily/tiles/archive')
+print(f'{ngoodz_gal/1e6:.1f}M good galaxy redshifts')
+print(f'{ngoodz_qso/1e6:.1f}M good quasar redshifts')
+
+
+
+
+

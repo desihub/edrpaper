@@ -1,0 +1,28 @@
+#!/usr/bin/env python
+
+"""
+Document stats for desidatadocs edr page
+"""
+
+import os, sys, glob
+import numpy as np
+import fitsio
+
+zallfile = os.path.expandvars('$DESI_ROOT/spectro/redux/fuji/zcatalog/zall-pix-fuji.fits')
+
+tx = fitsio.read(zallfile, 1,
+        columns=('TARGETID', 'OBJTYPE', 'SPECTYPE', 'ZWARN', 'ZCAT_PRIMARY'))
+tx = tx[ tx['OBJTYPE'] == 'TGT' ]  # science targets
+ok = (tx['ZWARN']==0)
+good = ok & tx['ZCAT_PRIMARY']
+galaxy = tx['SPECTYPE'] == 'GALAXY'
+qso = tx['SPECTYPE'] == 'QSO'
+star = tx['SPECTYPE'] == 'STAR'
+
+print('Number of healpix spectra      ', len(tx))
+print('Number of useful spectra       ', np.sum(ok))
+print('Number of useful unique targets', len(np.unique(tx['TARGETID'][good])))
+print('   Galaxies', len(np.unique(tx['TARGETID'][good & galaxy])))
+print('   Quasars ', len(np.unique(tx['TARGETID'][good & qso])))
+print('   Stars   ', len(np.unique(tx['TARGETID'][good & star])))
+
